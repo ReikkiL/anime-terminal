@@ -1,177 +1,139 @@
 #!/bin/bash
 
-# Script interactivo para ver anime en terminal desde JKAnime
-# Requiere: mpv, yt-dlp, curl, jq
-# Instalación: sudo pacman -S mpv curl jq yt-dlp
+# Script mejorado para buscar y reproducir anime desde JKAnime
+# Requiere: mpv, yt-dlp, curl, fzf (opcional pero recomendado)
+# Instalación: sudo pacman -S mpv yt-dlp curl fzf
 
 set -e
 
-# Colores para mejor visualización
+# Colores
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
-MAGENTA='\033[0;35m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# Configuración
 JKANIME_URL="https://jkanime.net"
 CACHE_DIR="${HOME}/.cache/animeplay"
-CACHE_FILE="${CACHE_DIR}/anime_cache.json"
-
-# Crear directorio de caché
 mkdir -p "$CACHE_DIR"
 
-# Función para limpiar pantalla con estilo
-clear_screen() {
+# Banner
+banner() {
     clear
     echo -e "${BLUE}"
-    echo "╔════════════════════════════════════════════╗"
-    echo "║     🎌 REPRODUCTOR DE ANIME EN TERMINAL 🎌   ║"
-    echo "║              JKAnime Español                 ║"
-    echo "╚════════════════════════════════════════════╝"
+    echo "╔════════════════════════════════════════╗"
+    echo "║   🎌 BUSCADOR DE ANIME - JKANIME 🎌    ║"
+    echo "╚════════════════════════════════════════╝"
     echo -e "${NC}\n"
 }
 
 # Verificar dependencias
-check_dependencies() {
-    local missing_deps=()
-    
-    if ! command -v mpv &> /dev/null; then
-        missing_deps+=("mpv")
-    fi
-    
-    if ! command -v yt-dlp &> /dev/null; then
-        missing_deps+=("yt-dlp")
-    fi
-    
-    if ! command -v curl &> /dev/null; then
-        missing_deps+=("curl")
-    fi
-    
-    if [ ${#missing_deps[@]} -gt 0 ]; then
-        echo -e "${RED}❌ Faltan dependencias:${NC}"
-        for dep in "${missing_deps[@]}"; do
-            echo "  - $dep"
-        done
-        echo -e "\n${YELLOW}Instala con:${NC}"
-        echo "  sudo pacman -S mpv curl jq yt-dlp"
-        exit 1
-    fi
+check_deps() {
+    for cmd in mpv yt-dlp curl; do
+        if ! command -v "$cmd" &> /dev/null; then
+            echo -e "${RED}❌ Falta instalar: $cmd${NC}"
+            exit 1
+        fi
+    done
 }
 
-# Función para buscar anime con User-Agent
+# Buscar anime en JKAnime
 search_anime() {
-    clear_screen
-    read -p "$(echo -e ${CYAN})Ingresa el nombre del anime:${NC} " search_query
+    banner
+    read -p "$(echo -e ${CYAN}Busca un anime:${NC} )" query
     
-    if [ -z "$search_query" ]; then
-        echo -e "${RED}❌ Búsqueda vacía${NC}"
-        sleep 2
+    if [ -z "$query" ]; then
+        echo -e "${RED}Búsqueda vacía${NC}"
         return 1
     fi
     
-    echo -e "\n${YELLOW}⏳ Buscando anime...${NC}\n"
+    echo -e "\n${YELLOW}🔍 Buscando...${NC}\n"
     
-    # URL de búsqueda con User-Agent
-    local search_url="${JKANIME_URL}/buscar/?q=$(echo "$search_query" | sed 's/ /%20/g')"
-    
-    # Obtener HTML de búsqueda con User-Agent
-    local html=$(curl -s -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36" "$search_url" 2>/dev/null)
+    # Hacer la búsqueda
+    local url="${JKANIME_URL}/buscar/?q=$(echo "$query" | sed 's/ /%20/g')"
+    local html=$(curl -s -A "Mozilla/5.0" "$url" 2>/dev/null)
     
     if [ -z "$html" ]; then
         echo -e "${RED}❌ Error de conexión${NC}"
-        read -p "Presiona Enter para continuar..."
         return 1
     fi
     
-    # Extraer resultados mejorado
-    local results=$(echo "$html" | grep -oP '(?<=href=")[^"]*anime[^"]*' | head -20)
+    # Extraer todos los links de anime/manga
+    local links=$(echo "$html" | grep -oP 'href="[^"]*/(anime|manga)/[^"]*"' | sed 's/href="//;s/"$//' | sort -u)
     
-    if [ -z "$results" ]; then
-        echo -e "${RED}❌ No se encontraron resultados${NC}"
-        read -p "Presiona Enter para continuar..."
+    if [ -z "$links" ]; then
+        echo -e "${RED}❌ Sin resultados${NC}"
         return 1
     fi
     
-    # Mostrar resultados
-    echo -e "${GREEN}Resultados encontrados:${NC}\n"
+    # Contar y mostrar resultados
+    local count=$(echo "$links" | wc -l)
+    echo -e "${GREEN}✓ Encontrados $count resultados:${NC}\n"
     
     local i=1
-    declare -a anime_urls
-    declare -a anime_names
+    declare -a urls
     
-    while IFS= read -r url; do
-        if [ ! -z "$url" ]; then
-            # Extraer nombre del URL
-            local name=$(echo "$url" | sed 's/.*\///' | sed 's/-/ /g' | sed 's/%20/ /g' | cut -d'?' -f1)
-            echo -e "${YELLOW}$i)${NC} $name"
-            anime_urls[$i]="$JKANIME_URL$url"
-            anime_names[$i]="$name"
-            ((i++))
-        fi
-    done <<< "$results"
+    while IFS= read -r link; do
+        # Extraer nombre legible
+        local name=$(echo "$link" | sed 's/.*\///' | sed 's/-/ /g' | sed 's/%20/ /g')
+        echo -e "${YELLOW}$i)${NC} $name"
+        urls[$i]="${JKANIME_URL}${link}"
+        ((i++))
+    done <<< "$links"
     
-    if [ $i -eq 1 ]; then
-        echo -e "${RED}❌ No se pudieron procesar los resultados${NC}"
-        read -p "Presiona Enter para continuar..."
-        return 1
-    fi
-    
-    echo -e "\n${YELLOW}0)${NC} Volver al menú principal"
+    echo -e "\n${YELLOW}0)${NC} Volver"
     echo
-    read -p "Selecciona un anime (0-$((i-1))): " selection
+    read -p "Elige uno (0-$((i-1))): " choice
     
-    if [ "$selection" -eq 0 ] 2>/dev/null; then
+    if [ "$choice" -eq 0 ] 2>/dev/null; then
         return 0
     fi
     
-    if [ -z "${anime_urls[$selection]}" ]; then
-        echo -e "${RED}❌ Opción inválida${NC}"
-        sleep 2
+    if [ -z "${urls[$choice]}" ]; then
+        echo -e "${RED}Opción inválida${NC}"
+        sleep 1
         return 1
     fi
     
-    # Mostrar episodios del anime seleccionado
-    show_episodes "${anime_urls[$selection]}" "${anime_names[$selection]}"
+    # Mostrar episodios
+    show_episodes_from_url "${urls[$choice]}"
 }
 
-# Función para mostrar episodios y temporadas
-show_episodes() {
-    local anime_url="$1"
-    local anime_name="$2"
-    clear_screen
+# Mostrar episodios de una página
+show_episodes_from_url() {
+    local page_url="$1"
+    banner
     
-    echo -e "${YELLOW}⏳ Obteniendo información del anime...${NC}\n"
+    echo -e "${YELLOW}⏳ Obteniendo episodios...${NC}\n"
     
-    # Obtener HTML del anime con User-Agent
-    local html=$(curl -s -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36" "$anime_url" 2>/dev/null)
+    local html=$(curl -s -A "Mozilla/5.0" "$page_url" 2>/dev/null)
     
     if [ -z "$html" ]; then
-        echo -e "${RED}❌ Error al obtener información${NC}"
-        read -p "Presiona Enter para continuar..."
+        echo -e "${RED}❌ No se pudo acceder${NC}"
+        read -p "Presiona Enter..."
         return 1
     fi
     
-    echo -e "${CYAN}🎌 Anime: ${GREEN}$anime_name${NC}\n"
+    # Obtener nombre
+    local title=$(echo "$html" | grep -oP '<h1[^>]*>\K[^<]+' | head -1)
+    echo -e "${CYAN}📺 $title${NC}\n"
     
-    # Buscar episodios disponibles
-    local episodes=$(echo "$html" | grep -oP '(?<=ep=)[0-9]+' | sort -n -u)
+    # Buscar episodios en los enlaces
+    local episodes=$(echo "$html" | grep -oP "(?<=ep=)[0-9]+" | sort -n -u)
     
     if [ -z "$episodes" ]; then
-        echo -e "${YELLOW}⏳ Intentando método alternativo...${NC}"
-        # Método alternativo: buscar en los episodios listados
-        episodes=$(echo "$html" | grep -oP 'Episodio\s+\K[0-9]+' | sort -n -u)
+        # Método alternativo
+        episodes=$(echo "$html" | grep -oP 'episodio["\s]*[:=]["\s]*\K[0-9]+' | sort -n -u | head -50)
     fi
     
     if [ -z "$episodes" ]; then
-        echo -e "${RED}❌ No se encontraron episodios${NC}"
-        read -p "Presiona Enter para continuar..."
+        echo -e "${RED}❌ No hay episodios${NC}"
+        read -p "Presiona Enter..."
         return 1
     fi
     
-    echo -e "${YELLOW}Episodios disponibles:${NC}\n"
+    echo -e "${GREEN}Episodios:${NC}\n"
     
     local i=1
     declare -a ep_array
@@ -184,205 +146,158 @@ show_episodes() {
         fi
     done <<< "$episodes"
     
-    echo -e "\n${YELLOW}0)${NC} Volver al menú principal"
+    echo -e "\n${YELLOW}0)${NC} Volver"
     echo
-    read -p "Selecciona un episodio (0-$((i-1))): " ep_selection
+    read -p "Elige episodio (0-$((i-1))): " ep_choice
     
-    if [ "$ep_selection" -eq 0 ] 2>/dev/null; then
+    if [ "$ep_choice" -eq 0 ] 2>/dev/null; then
         return 0
     fi
     
-    if [ -z "${ep_array[$ep_selection]}" ]; then
-        echo -e "${RED}❌ Opción inválida${NC}"
-        sleep 2
+    if [ -z "${ep_array[$ep_choice]}" ]; then
+        echo -e "${RED}Opción inválida${NC}"
+        sleep 1
         return 1
     fi
     
-    # Reproducir episodio
-    play_episode "$anime_url?ep=${ep_array[$ep_selection]}" "$anime_name" "${ep_array[$ep_selection]}"
+    # Reproducir
+    play_episode "$page_url" "$title" "${ep_array[$ep_choice]}"
 }
 
-# Función para reproducir episodio
+# Reproducir episodio
 play_episode() {
-    local url="$1"
-    local anime_name="$2"
-    local episode="$3"
+    local base_url="$1"
+    local title="$2"
+    local ep="$3"
     
-    clear_screen
-    echo -e "${CYAN}🎌 $anime_name${NC}"
-    echo -e "${CYAN}📺 Episodio: $episode${NC}\n"
+    banner
+    echo -e "${CYAN}🎬 $title${NC}"
+    echo -e "${CYAN}📺 Episodio $ep${NC}\n"
     echo -e "${YELLOW}⏳ Obteniendo stream...${NC}\n"
     
-    # Intentar obtener el stream con yt-dlp
-    local stream_url=$(yt-dlp -g "$url" 2>/dev/null)
+    # Construir URL del episodio
+    local ep_url="${base_url}?ep=${ep}"
     
-    if [ -z "$stream_url" ]; then
-        echo -e "${RED}❌ No se pudo obtener el stream${NC}"
-        echo -e "${YELLOW}URL intentada: $url${NC}"
-        echo -e "${YELLOW}Intenta manualmente con:${NC}"
-        echo "  mpv \"\$(yt-dlp -g '$url')\""
-        read -p "Presiona Enter para continuar..."
+    # Obtener stream con yt-dlp
+    local stream=$(yt-dlp -g "$ep_url" 2>/dev/null)
+    
+    if [ -z "$stream" ]; then
+        echo -e "${RED}❌ No se pudo obtener el video${NC}"
+        echo -e "URL: $ep_url"
+        read -p "Presiona Enter..."
         return 1
     fi
     
-    echo -e "${GREEN}✓ Stream encontrado${NC}"
-    echo -e "${YELLOW}⏳ Iniciando reproducción...${NC}\n"
+    echo -e "${GREEN}✓ Stream listo${NC}"
+    echo -e "${YELLOW}▶️  Iniciando mpv...${NC}\n"
     sleep 2
     
-    # Reproducir con mpv con soporte para subtítulos en español
+    # Reproducir
     mpv \
         --sub-auto=fuzzy \
-        --sub-file-paths=ass:srt:sub:subs:subtitles \
-        --alang=es,es-ES,esp \
+        --alang=es,es-ES,spa \
         --slang=es,es-ES,spa \
-        --title="${anime_name} - Episodio ${episode}" \
-        "$stream_url"
+        --title="$title - Ep $ep" \
+        "$stream"
     
     # Menú post-reproducción
-    post_play_menu "$url" "$anime_name" "$episode"
+    menu_post "$base_url" "$title" "$ep"
 }
 
-# Menú después de ver un episodio
-post_play_menu() {
-    local url="$1"
-    local anime_name="$2"
+# Menú después de ver
+menu_post() {
+    local base_url="$1"
+    local title="$2"
     local current_ep="$3"
     
-    clear_screen
-    echo -e "${CYAN}🎌 $anime_name${NC}"
-    echo -e "${CYAN}📺 Episodio: $current_ep${NC}\n"
-    echo -e "${YELLOW}1)${NC} Ver siguiente episodio"
-    echo -e "${YELLOW}2)${NC} Ver episodio anterior"
-    echo -e "${YELLOW}3)${NC} Ver otro episodio"
-    echo -e "${YELLOW}4)${NC} Volver al menú principal"
+    banner
+    echo -e "${CYAN}$title - Ep $current_ep${NC}\n"
+    echo -e "${YELLOW}1)${NC} Siguiente episodio"
+    echo -e "${YELLOW}2)${NC} Episodio anterior"
+    echo -e "${YELLOW}3)${NC} Otro episodio"
+    echo -e "${YELLOW}4)${NC} Menú principal"
     echo
-    read -p "Selecciona una opción (1-4): " post_selection
+    read -p "Elige: " opt
     
-    case $post_selection in
+    case $opt in
         1)
-            local next_ep=$((current_ep + 1))
-            play_episode "${url%\?*}?ep=$next_ep" "$anime_name" "$next_ep"
+            local next=$((current_ep + 1))
+            play_episode "$base_url" "$title" "$next"
             ;;
         2)
             if [ $current_ep -gt 1 ]; then
-                local prev_ep=$((current_ep - 1))
-                play_episode "${url%\?*}?ep=$prev_ep" "$anime_name" "$prev_ep"
+                local prev=$((current_ep - 1))
+                play_episode "$base_url" "$title" "$prev"
             else
-                echo -e "${RED}No hay episodio anterior${NC}"
+                echo -e "${RED}No hay anterior${NC}"
                 sleep 2
-                post_play_menu "$url" "$anime_name" "$current_ep"
+                menu_post "$base_url" "$title" "$current_ep"
             fi
             ;;
         3)
-            show_episodes "${url%\?*}" "$anime_name"
+            show_episodes_from_url "$base_url"
             ;;
         4)
             return 0
             ;;
         *)
-            echo -e "${RED}Opción inválida${NC}"
+            echo -e "${RED}Inválido${NC}"
             sleep 1
-            post_play_menu "$url" "$anime_name" "$current_ep"
+            menu_post "$base_url" "$title" "$current_ep"
             ;;
     esac
 }
 
-# Reproducir por URL directa
-play_from_url() {
-    clear_screen
-    read -p "$(echo -e ${CYAN})Ingresa la URL del episodio:${NC} " episode_url
+# URL directa
+play_url() {
+    banner
+    read -p "$(echo -e ${CYAN})URL del episodio:${NC} " url
     
-    if [ -z "$episode_url" ]; then
-        echo -e "${RED}❌ URL vacía${NC}"
-        sleep 2
+    if [ -z "$url" ]; then
         return 1
     fi
     
-    # Validar que sea de JKAnime
-    if [[ ! "$episode_url" =~ jkanime ]]; then
-        echo -e "${YELLOW}⚠️  Advertencia: URL no es de JKAnime${NC}"
-        read -p "¿Continuar de todos modos? (s/n): " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Ss]$ ]]; then
-            return 1
-        fi
-    fi
-    
-    echo -e "\n${YELLOW}⏳ Procesando URL...${NC}\n"
+    echo -e "\n${YELLOW}⏳ Procesando...${NC}\n"
     sleep 1
     
-    # Intentar reproducir
-    play_episode "$episode_url" "Anime" "?"
+    local stream=$(yt-dlp -g "$url" 2>/dev/null)
+    
+    if [ -z "$stream" ]; then
+        echo -e "${RED}❌ Error${NC}"
+        read -p "Presiona Enter..."
+        return 1
+    fi
+    
+    mpv "$stream"
 }
 
 # Menú principal
 main_menu() {
     while true; do
-        clear_screen
-        echo -e "${YELLOW}OPCIONES PRINCIPALES:${NC}\n"
-        echo -e "${GREEN}1)${NC} Buscar anime por nombre"
-        echo -e "${GREEN}2)${NC} Reproducir por URL"
-        echo -e "${GREEN}3)${NC} Configuración"
-        echo -e "${RED}4)${NC} Salir"
+        banner
+        echo -e "${YELLOW}OPCIONES:${NC}\n"
+        echo -e "${GREEN}1)${NC} Buscar anime"
+        echo -e "${GREEN}2)${NC} URL directa"
+        echo -e "${RED}3)${NC} Salir"
         echo
-        read -p "Selecciona una opción (1-4): " main_option
+        read -p "Elige: " opt
         
-        case $main_option in
-            1)
-                search_anime
-                ;;
-            2)
-                play_from_url
-                ;;
-            3)
-                show_settings
-                ;;
-            4)
+        case $opt in
+            1) search_anime ;;
+            2) play_url ;;
+            3) 
                 clear
-                echo -e "${GREEN}¡Que disfrutes viendo anime! 🎌${NC}"
+                echo -e "${GREEN}¡Que disfrutes! 🎌${NC}"
                 exit 0
                 ;;
             *)
-                echo -e "${RED}❌ Opción inválida${NC}"
+                echo -e "${RED}Inválido${NC}"
                 sleep 1
                 ;;
         esac
     done
 }
 
-# Mostrar configuración
-show_settings() {
-    clear_screen
-    echo -e "${YELLOW}CONFIGURACIÓN:${NC}\n"
-    echo -e "${GREEN}1)${NC} Idioma de audio (Español)"
-    echo -e "${GREEN}2)${NC} Subtítulos (Automático)"
-    echo -e "${GREEN}3)${NC} Limpiar caché"
-    echo -e "${YELLOW}0)${NC} Volver"
-    echo
-    read -p "Selecciona una opción: " settings_option
-    
-    case $settings_option in
-        3)
-            rm -rf "$CACHE_DIR"
-            mkdir -p "$CACHE_DIR"
-            echo -e "${GREEN}✓ Caché limpiado${NC}"
-            sleep 2
-            ;;
-        0)
-            return 0
-            ;;
-        *)
-            echo -e "${RED}❌ Opción inválida${NC}"
-            sleep 2
-            ;;
-    esac
-}
-
-# Punto de entrada principal
-main() {
-    check_dependencies
-    main_menu
-}
-
-# Ejecutar script
-main "$@"
+# Ejecutar
+check_deps
+main_menu
