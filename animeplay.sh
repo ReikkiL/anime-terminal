@@ -50,10 +50,6 @@ check_dependencies() {
         missing_deps+=("curl")
     fi
     
-    if ! command -v jq &> /dev/null; then
-        missing_deps+=("jq")
-    fi
-    
     if [ ${#missing_deps[@]} -gt 0 ]; then
         echo -e "${RED}❌ Faltan dependencias:${NC}"
         for dep in "${missing_deps[@]}"; do
@@ -65,7 +61,7 @@ check_dependencies() {
     fi
 }
 
-# Función para buscar anime
+# Función para buscar anime con User-Agent
 search_anime() {
     clear_screen
     read -p "$(echo -e ${CYAN})Ingresa el nombre del anime:${NC} " search_query
@@ -78,24 +74,24 @@ search_anime() {
     
     echo -e "\n${YELLOW}⏳ Buscando anime...${NC}\n"
     
-    # URL de búsqueda
+    # URL de búsqueda con User-Agent
     local search_url="${JKANIME_URL}/buscar/?q=$(echo "$search_query" | sed 's/ /%20/g')"
     
-    # Obtener HTML de búsqueda
-    local html=$(curl -s "$search_url" 2>/dev/null)
+    # Obtener HTML de búsqueda con User-Agent
+    local html=$(curl -s -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36" "$search_url" 2>/dev/null)
     
     if [ -z "$html" ]; then
         echo -e "${RED}❌ Error de conexión${NC}"
-        sleep 2
+        read -p "Presiona Enter para continuar..."
         return 1
     fi
     
-    # Extraer resultados (títulos y URLs)
-    local results=$(echo "$html" | grep -oP '(?<=<a href=")[^"]*(?:anime|serie).*?(?=")' | head -20)
+    # Extraer resultados mejorado
+    local results=$(echo "$html" | grep -oP '(?<=href=")[^"]*anime[^"]*' | head -20)
     
     if [ -z "$results" ]; then
         echo -e "${RED}❌ No se encontraron resultados${NC}"
-        sleep 2
+        read -p "Presiona Enter para continuar..."
         return 1
     fi
     
@@ -104,16 +100,24 @@ search_anime() {
     
     local i=1
     declare -a anime_urls
+    declare -a anime_names
     
     while IFS= read -r url; do
         if [ ! -z "$url" ]; then
             # Extraer nombre del URL
-            local name=$(echo "$url" | sed 's/.*\///' | sed 's/-/ /g' | sed 's/%20/ /g')
+            local name=$(echo "$url" | sed 's/.*\///' | sed 's/-/ /g' | sed 's/%20/ /g' | cut -d'?' -f1)
             echo -e "${YELLOW}$i)${NC} $name"
             anime_urls[$i]="$JKANIME_URL$url"
+            anime_names[$i]="$name"
             ((i++))
         fi
     done <<< "$results"
+    
+    if [ $i -eq 1 ]; then
+        echo -e "${RED}❌ No se pudieron procesar los resultados${NC}"
+        read -p "Presiona Enter para continuar..."
+        return 1
+    fi
     
     echo -e "\n${YELLOW}0)${NC} Volver al menú principal"
     echo
@@ -130,150 +134,44 @@ search_anime() {
     fi
     
     # Mostrar episodios del anime seleccionado
-    show_episodes "${anime_urls[$selection]}"
+    show_episodes "${anime_urls[$selection]}" "${anime_names[$selection]}"
 }
 
 # Función para mostrar episodios y temporadas
 show_episodes() {
     local anime_url="$1"
+    local anime_name="$2"
     clear_screen
     
     echo -e "${YELLOW}⏳ Obteniendo información del anime...${NC}\n"
     
-    # Obtener HTML del anime
-    local html=$(curl -s "$anime_url" 2>/dev/null)
+    # Obtener HTML del anime con User-Agent
+    local html=$(curl -s -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36" "$anime_url" 2>/dev/null)
     
     if [ -z "$html" ]; then
         echo -e "${RED}❌ Error al obtener información${NC}"
-        sleep 2
+        read -p "Presiona Enter para continuar..."
         return 1
     fi
     
-    # Obtener nombre del anime
-    local anime_name=$(echo "$html" | grep -oP '(?<=<h1>)[^<]*' | head -1)
     echo -e "${CYAN}🎌 Anime: ${GREEN}$anime_name${NC}\n"
     
-    # Buscar todas las temporadas disponibles
-    local seasons=$(echo "$html" | grep -oP '(?<=Season )[0-9]+' | sort -u)
-    
-    if [ -z "$seasons" ]; then
-        # Si no hay temporadas, mostrar todos los episodios
-        show_all_episodes "$anime_url" "$anime_name"
-    else
-        # Mostrar menú de temporadas
-        show_season_menu "$seasons" "$anime_url" "$anime_name"
-    fi
-}
-
-# Función para mostrar menú de temporadas
-show_season_menu() {
-    local seasons="$1"
-    local anime_url="$2"
-    local anime_name="$3"
-    
-    clear_screen
-    echo -e "${CYAN}🎌 Anime: ${GREEN}$anime_name${NC}\n"
-    echo -e "${YELLOW}Temporadas disponibles:${NC}\n"
-    
-    local i=1
-    declare -a season_array
-    
-    while IFS= read -r season; do
-        echo -e "${YELLOW}$i)${NC} Temporada $season"
-        season_array[$i]=$season
-        ((i++))
-    done <<< "$seasons"
-    
-    echo -e "\n${YELLOW}0)${NC} Volver al menú principal"
-    echo
-    read -p "Selecciona una temporada (0-$((i-1))): " season_selection
-    
-    if [ "$season_selection" -eq 0 ] 2>/dev/null; then
-        return 0
-    fi
-    
-    if [ -z "${season_array[$season_selection]}" ]; then
-        echo -e "${RED}❌ Opción inválida${NC}"
-        sleep 2
-        return 1
-    fi
-    
-    # Mostrar episodios de la temporada seleccionada
-    show_season_episodes "$anime_url" "${season_array[$season_selection]}" "$anime_name"
-}
-
-# Función para mostrar episodios de una temporada específica
-show_season_episodes() {
-    local anime_url="$1"
-    local season="$2"
-    local anime_name="$3"
-    
-    clear_screen
-    echo -e "${CYAN}🎌 Anime: ${GREEN}$anime_name${NC}"
-    echo -e "${CYAN}📺 Temporada: ${GREEN}$season${NC}\n"
-    
-    # Obtener HTML
-    local html=$(curl -s "$anime_url" 2>/dev/null)
-    
-    # Extraer episodios de la temporada (esto es una aproximación)
-    local episodes=$(echo "$html" | grep -oP "(?<=ep=)[0-9]+" | sort -u)
+    # Buscar episodios disponibles
+    local episodes=$(echo "$html" | grep -oP '(?<=ep=)[0-9]+' | sort -n -u)
     
     if [ -z "$episodes" ]; then
-        echo -e "${YELLOW}⏳ Buscando episodios de otra forma...${NC}"
-        # Alternativa: buscar enlaces de episodios
-        show_all_episodes "$anime_url" "$anime_name"
-        return
+        echo -e "${YELLOW}⏳ Intentando método alternativo...${NC}"
+        # Método alternativo: buscar en los episodios listados
+        episodes=$(echo "$html" | grep -oP 'Episodio\s+\K[0-9]+' | sort -n -u)
     fi
-    
-    echo -e "${YELLOW}Episodios disponibles:${NC}\n"
-    
-    local i=1
-    declare -a ep_array
-    
-    while IFS= read -r ep; do
-        echo -e "${YELLOW}$i)${NC} Episodio $ep"
-        ep_array[$i]=$ep
-        ((i++))
-    done <<< "$episodes"
-    
-    echo -e "\n${YELLOW}0)${NC} Volver al menú principal"
-    echo
-    read -p "Selecciona un episodio (0-$((i-1))): " ep_selection
-    
-    if [ "$ep_selection" -eq 0 ] 2>/dev/null; then
-        return 0
-    fi
-    
-    if [ -z "${ep_array[$ep_selection]}" ]; then
-        echo -e "${RED}❌ Opción inválida${NC}"
-        sleep 2
-        return 1
-    fi
-    
-    # Reproducir episodio
-    play_episode "$anime_url?ep=${ep_array[$ep_selection]}" "$anime_name" "${ep_array[$ep_selection]}"
-}
-
-# Función para mostrar todos los episodios (si no hay temporadas)
-show_all_episodes() {
-    local anime_url="$1"
-    local anime_name="$2"
-    
-    clear_screen
-    echo -e "${CYAN}🎌 Anime: ${GREEN}$anime_name${NC}\n"
-    echo -e "${YELLOW}Episodios disponibles:${NC}\n"
-    
-    # Obtener HTML
-    local html=$(curl -s "$anime_url" 2>/dev/null)
-    
-    # Extraer episodios
-    local episodes=$(echo "$html" | grep -oP "(?<=ep=)[0-9]+" | sort -n -u | head -50)
     
     if [ -z "$episodes" ]; then
         echo -e "${RED}❌ No se encontraron episodios${NC}"
-        sleep 2
+        read -p "Presiona Enter para continuar..."
         return 1
     fi
+    
+    echo -e "${YELLOW}Episodios disponibles:${NC}\n"
     
     local i=1
     declare -a ep_array
@@ -321,7 +219,9 @@ play_episode() {
     if [ -z "$stream_url" ]; then
         echo -e "${RED}❌ No se pudo obtener el stream${NC}"
         echo -e "${YELLOW}URL intentada: $url${NC}"
-        sleep 3
+        echo -e "${YELLOW}Intenta manualmente con:${NC}"
+        echo "  mpv \"\$(yt-dlp -g '$url')\""
+        read -p "Presiona Enter para continuar..."
         return 1
     fi
     
@@ -330,7 +230,6 @@ play_episode() {
     sleep 2
     
     # Reproducir con mpv con soporte para subtítulos en español
-    # mpv intentará descargar subtítulos automáticamente
     mpv \
         --sub-auto=fuzzy \
         --sub-file-paths=ass:srt:sub:subs:subtitles \
@@ -353,10 +252,11 @@ post_play_menu() {
     echo -e "${CYAN}🎌 $anime_name${NC}"
     echo -e "${CYAN}📺 Episodio: $current_ep${NC}\n"
     echo -e "${YELLOW}1)${NC} Ver siguiente episodio"
-    echo -e "${YELLOW}2)${NC} Ver otro episodio"
-    echo -e "${YELLOW}3)${NC} Volver al menú principal"
+    echo -e "${YELLOW}2)${NC} Ver episodio anterior"
+    echo -e "${YELLOW}3)${NC} Ver otro episodio"
+    echo -e "${YELLOW}4)${NC} Volver al menú principal"
     echo
-    read -p "Selecciona una opción (1-3): " post_selection
+    read -p "Selecciona una opción (1-4): " post_selection
     
     case $post_selection in
         1)
@@ -364,9 +264,19 @@ post_play_menu() {
             play_episode "${url%\?*}?ep=$next_ep" "$anime_name" "$next_ep"
             ;;
         2)
-            show_all_episodes "${url%\?*}" "$anime_name"
+            if [ $current_ep -gt 1 ]; then
+                local prev_ep=$((current_ep - 1))
+                play_episode "${url%\?*}?ep=$prev_ep" "$anime_name" "$prev_ep"
+            else
+                echo -e "${RED}No hay episodio anterior${NC}"
+                sleep 2
+                post_play_menu "$url" "$anime_name" "$current_ep"
+            fi
             ;;
         3)
+            show_episodes "${url%\?*}" "$anime_name"
+            ;;
+        4)
             return 0
             ;;
         *)
@@ -412,11 +322,10 @@ main_menu() {
         echo -e "${YELLOW}OPCIONES PRINCIPALES:${NC}\n"
         echo -e "${GREEN}1)${NC} Buscar anime por nombre"
         echo -e "${GREEN}2)${NC} Reproducir por URL"
-        echo -e "${GREEN}3)${NC} Ver historial de búsquedas"
-        echo -e "${GREEN}4)${NC} Configuración"
-        echo -e "${RED}5)${NC} Salir"
+        echo -e "${GREEN}3)${NC} Configuración"
+        echo -e "${RED}4)${NC} Salir"
         echo
-        read -p "Selecciona una opción (1-5): " main_option
+        read -p "Selecciona una opción (1-4): " main_option
         
         case $main_option in
             1)
@@ -426,12 +335,9 @@ main_menu() {
                 play_from_url
                 ;;
             3)
-                show_history
-                ;;
-            4)
                 show_settings
                 ;;
-            5)
+            4)
                 clear
                 echo -e "${GREEN}¡Que disfrutes viendo anime! 🎌${NC}"
                 exit 0
@@ -442,14 +348,6 @@ main_menu() {
                 ;;
         esac
     done
-}
-
-# Mostrar historial
-show_history() {
-    clear_screen
-    echo -e "${YELLOW}Historial de búsquedas:${NC}\n"
-    echo -e "${CYAN}Función aún en desarrollo${NC}"
-    sleep 2
 }
 
 # Mostrar configuración
